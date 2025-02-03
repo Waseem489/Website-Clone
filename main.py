@@ -1,5 +1,4 @@
 from scraper import WebScraper
-import config
 import logging
 import os
 
@@ -8,18 +7,24 @@ def main():
         url = input("Enter website URL: ")
         scraper = WebScraper(url)
         
-        print('Starting scraping process...')
-        data = scraper.scrape()
+        print('Starting website cloning...')
+        data = scraper.clone_website()
         
         if data:
             print(f'''
-Scraping completed successfully:
+Website cloned successfully:
 - Images: {len(data["images"])}
-- Headers: {len(data["headers"])}
-- Paragraphs: {len(data["paragraphs"])}
-- Links: {len(data["links"])}
+- CSS files: {len(data["css_files"])}
+- JavaScript files: {len(data["js_files"])}
 
-Data saved in: {scraper.base_dir}
+Files saved in: {scraper.base_dir}
+
+Folder structure:
+- {scraper.base_dir}/
+  ├── images/    (Downloaded images)
+  ├── css/       (Stylesheet files)
+  ├── js/        (JavaScript files)
+  └── index.html (Main HTML file)
 ''')
         
     except Exception as e:

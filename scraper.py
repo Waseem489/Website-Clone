@@ -20,16 +20,22 @@ import json
 class WebScraper:
     def __init__(self, base_url):
         self.base_url = base_url
-        self.domain = urlparse(base_url).netloc.replace('www.', '')
-        self.base_dir = os.path.join('data', self.sanitize_filename(self.domain))
+        self.domain = urlparse(base_url).netloc
         
-        # إنشاء المجلدات الأساسية
+        # Create directory for website
+        self.base_dir = os.path.join('data', self.domain)
+        
+        # Create main directories
         self.images_dir = os.path.join(self.base_dir, 'images')
         self.data_dir = os.path.join(self.base_dir, 'data')
-        os.makedirs(self.images_dir, exist_ok=True)
-        os.makedirs(self.data_dir, exist_ok=True)
+        self.css_dir = os.path.join(self.base_dir, 'css')
+        self.js_dir = os.path.join(self.base_dir, 'js')
         
-        # إعداد التسجيل
+        # Create directories
+        for directory in [self.images_dir, self.data_dir, self.css_dir, self.js_dir]:
+            os.makedirs(directory, exist_ok=True)
+        
+        # Set up logging
         log_file = os.path.join(self.base_dir, 'scraping.log')
         logging.basicConfig(
             level=logging.INFO,
@@ -41,7 +47,7 @@ class WebScraper:
         )
         self.logger = logging.getLogger(__name__)
         
-        # إعداد Selenium
+        # Set up Selenium
         chrome_options = Options()
         chrome_options.add_argument('--headless=new')
         chrome_options.add_argument('--no-sandbox')
@@ -54,7 +60,7 @@ class WebScraper:
         self.driver = webdriver.Chrome(service=service, options=chrome_options)
         self.wait = WebDriverWait(self.driver, 10)
         
-        # إعداد جلسة الطلبات
+        # Set up requests session
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -354,3 +360,195 @@ class WebScraper:
             self.logger.error(f"Error extracting images: {str(e)}")
 
         return image_urls
+
+    def process_css(self, css_url):
+        """Process and download CSS files"""
+        try:
+            if not css_url.startswith(('http://', 'https://')):
+                css_url = urljoin(self.base_url, css_url)
+            
+            response = self.session.get(css_url)
+            response.raise_for_status()
+            css_content = response.text
+            
+            # Update image paths in CSS
+            css_content = self.update_css_paths(css_content, css_url)
+            
+            # Save CSS file
+            css_filename = self.sanitize_filename(os.path.basename(urlparse(css_url).path))
+            if not css_filename.endswith('.css'):
+                css_filename += '.css'
+            
+            css_path = os.path.join(self.css_dir, css_filename)
+            with open(css_path, 'w', encoding='utf-8') as f:
+                f.write(css_content)
+            
+            self.logger.info(f'Saved CSS file: {css_filename}')
+            return css_filename
+            
+        except Exception as e:
+            self.logger.error(f'Error processing CSS {css_url}: {str(e)}')
+            return None
+
+    def update_css_paths(self, css_content, css_url):
+        """Update image paths in CSS"""
+        urls = re.findall(r'url\(["\']?(.*?)["\']?\)', css_content)
+        for url in urls:
+            if url.startswith('data:'):
+                continue
+                
+            absolute_url = urljoin(css_url, url)
+            filename = self.sanitize_filename(os.path.basename(urlparse(absolute_url).path))
+            
+            # Download image
+            if any(absolute_url.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.svg']):
+                img_path = os.path.join(self.images_dir, filename)
+                self.download_file(absolute_url, img_path)
+                css_content = css_content.replace(url, f'../images/{filename}')
+        
+        return css_content
+
+    def process_javascript(self, js_url):
+        """Process and download JavaScript files"""
+        try:
+            if not js_url.startswith(('http://', 'https://')):
+                js_url = urljoin(self.base_url, js_url)
+            
+            response = self.session.get(js_url)
+            response.raise_for_status()
+            
+            js_filename = self.sanitize_filename(os.path.basename(urlparse(js_url).path))
+            if not js_filename.endswith('.js'):
+                js_filename += '.js'
+            
+            js_path = os.path.join(self.js_dir, js_filename)
+            with open(js_path, 'w', encoding='utf-8') as f:
+                f.write(response.text)
+            
+            self.logger.info(f'Saved JavaScript file: {js_filename}')
+            return js_filename
+            
+        except Exception as e:
+            self.logger.error(f'Error processing JavaScript {js_url}: {str(e)}')
+            return None
+
+    def download_file(self, url, local_path):
+        """Download a file and save it locally"""
+        try:
+            response = self.session.get(url, stream=True)
+            response.raise_for_status()
+            
+            with open(local_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+            
+            self.logger.info(f'Downloaded: {os.path.basename(local_path)}')
+            return True
+            
+        except Exception as e:
+            self.logger.error(f'Error downloading {url}: {str(e)}')
+            return False
+
+    def combine_css_files(self, css_files):
+        """Combine all CSS files into one file"""
+        combined_css = []
+        for css_file in css_files:
+            file_path = os.path.join(self.css_dir, css_file)
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+                combined_css.append(f'/* {css_file} */\n{content}\n')
+        
+        # Save combined CSS
+        combined_file = os.path.join(self.base_dir, 'styles.css')
+        with open(combined_file, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(combined_css))
+        
+        self.logger.info('Combined all CSS files into styles.css')
+        return 'styles.css'
+
+    def combine_js_files(self, js_files):
+        """Combine all JavaScript files into one file"""
+        combined_js = []
+        for js_file in js_files:
+            file_path = os.path.join(self.js_dir, js_file)
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+                combined_js.append(f'// {js_file}\n{content}\n')
+        
+        # Save combined JavaScript
+        combined_file = os.path.join(self.base_dir, 'script.js')
+        with open(combined_file, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(combined_js))
+        
+        self.logger.info('Combined all JavaScript files into script.js')
+        return 'script.js'
+
+    def clone_website(self):
+        """Clone the entire website with all files"""
+        try:
+            self.logger.info(f'Starting website clone: {self.base_url}')
+            
+            # Load page
+            self.driver.get(self.base_url)
+            self.wait_for_page_load()
+            self.scroll_page()
+            
+            soup = BeautifulSoup(self.driver.page_source, 'html.parser')
+            
+            # Process CSS files
+            css_files = []
+            for link in soup.find_all('link', rel='stylesheet'):
+                css_url = link.get('href')
+                if css_url:
+                    css_filename = self.process_css(css_url)
+                    if css_filename:
+                        css_files.append(css_filename)
+            
+            # Process JavaScript files
+            js_files = []
+            for script in soup.find_all('script', src=True):
+                js_url = script['src']
+                js_filename = self.process_javascript(js_url)
+                if js_filename:
+                    js_files.append(js_filename)
+            
+            # Process images
+            images = self.download_images()
+            for img in soup.find_all('img'):
+                src = img.get('src')
+                if src in images:
+                    img['src'] = f'images/{os.path.basename(images[src])}'
+            
+            # Combine CSS files
+            combined_css = self.combine_css_files(css_files)
+            
+            # Combine JavaScript files
+            combined_js = self.combine_js_files(js_files)
+            
+            # Update HTML to use combined files
+            for link in soup.find_all('link', rel='stylesheet'):
+                link.decompose()
+            css_link = soup.new_tag('link', rel='stylesheet', href=combined_css)
+            soup.head.append(css_link)
+            
+            for script in soup.find_all('script', src=True):
+                script.decompose()
+            js_script = soup.new_tag('script', src=combined_js)
+            soup.body.append(js_script)
+            
+            # Save final HTML
+            html_path = os.path.join(self.base_dir, 'index.html')
+            with open(html_path, 'w', encoding='utf-8') as f:
+                f.write(str(soup.prettify()))
+            
+            self.logger.info('Website cloned successfully!')
+            return {
+                'images': images,
+                'css_file': combined_css,
+                'js_file': combined_js
+            }
+            
+        except Exception as e:
+            self.logger.error(f'Error cloning website: {str(e)}')
+            return None
